@@ -29,16 +29,17 @@ class AutomationAgent:
         self.jobs = { }
         self.job_control = { 'job_index': 1, 'n_running_jobs': 0, 'n_jobs': 0, 'n_running_jobs_by_type': {} }
         self.dataset_processor = DatasetProcessor()
+        self.start_directory = os.getcwd()
 
     # Destructor
     def __del__(self):
         #### Remove our PID file
-        pid_file = os.path.dirname(os.path.abspath(__file__))+"/PID"
+        pid_file = self.start_directory+"/PID"
         if os.path.exists(pid_file):
             os.remove(pid_file)
 
         # Remove our STOP file
-        stop_file = os.path.dirname(os.path.abspath(__file__))+"/STOP"
+        stop_file = self.start_directory+"/STOP"
         if os.path.exists(stop_file):
             os.remove(stop_file)
 
@@ -93,7 +94,7 @@ class AutomationAgent:
         }
 
         # Try to find a config file and read it
-        config_file = os.path.dirname(os.path.abspath(__file__))+"/agent_config.json"
+        config_file = "./agent_config.json"
         if os.path.exists(config_file):
             try:
                 with open(config_file) as infile:
@@ -102,7 +103,9 @@ class AutomationAgent:
                 self.response.error(f"Error reading config file {config_file} - {error}", error_code='ConfigFileReadError')
                 return
         else:
-            self.response.warning(f"Did not find a local config file {config_file}")
+            self.response.warning(f"Did not find a local config file {config_file}. Creating one with current defaults")
+            with open(config_file,'w') as outfile:
+                outfile.write(json.dumps(self.config, indent=4, sort_keys=True)+'\n')
             return
 
         self.response.info(f"Read agent config file {config_file}")
@@ -110,7 +113,11 @@ class AutomationAgent:
             if key in self.config:
                 self.config[key] = value
             else:
-                self.response.warning(f"Config file has unrecognized key {key} that is ignored")
+                self.response.error(f"Local config file has unrecognized key {key} that is not supported. Check spelling", error_code='ConfigFileKeyError')
+                return
+
+        # Set the data processors data path, too
+        self.dataset_processor.base_dir = self.config['data_path']
 
 
     # Prepare the agent state
@@ -123,13 +130,13 @@ class AutomationAgent:
         self.state['status'] = 'Preparing'
 
         # See if there is a PID file
-        pid_file = os.path.dirname(os.path.abspath(__file__))+"/PID"
+        pid_file = self.start_directory+"/PID"
         if os.path.exists(pid_file):
             self.response.error(f"There is already a PID file {pid_file}. Another instance is running.", error_code='PIDFileAlreadyExists')
             return
 
         # See if there is a STOP file
-        stop_file = os.path.dirname(os.path.abspath(__file__))+"/STOP"
+        stop_file = self.start_directory+"/STOP"
         if os.path.exists(stop_file):
             try:
                 os.remove(stop_file)
@@ -272,7 +279,7 @@ class AutomationAgent:
         self.state['status'] = 'Running'
 
         #### Define the STOP file to watch for
-        stop_file = os.path.dirname(os.path.abspath(__file__))+"/STOP"
+        stop_file = self.start_directory+"/STOP"
         heartbeat_time = 0
 
         while 1:
@@ -309,12 +316,12 @@ class AutomationAgent:
         self.state['status'] = 'Stopping'
 
         #### Remove our PID file
-        pid_file = os.path.dirname(os.path.abspath(__file__))+"/PID"
+        pid_file = self.start_directory+"/PID"
         if os.path.exists(pid_file):
             os.remove(pid_file)
 
         # Remove our STOP file
-        stop_file = os.path.dirname(os.path.abspath(__file__))+"/STOP"
+        stop_file = self.start_directory+"/STOP"
         if os.path.exists(stop_file):
             os.remove(stop_file)
 
@@ -473,9 +480,13 @@ class AutomationAgent:
 
             # If this was a file download job, update some key information
             if job['type'] == 'download':
-                job['file_handle']['status'] = 'READY'
-                job['file_handle']['is_complete'] = True
-                job['file_handle']['current_size'] = os.path.getsize(job['file_handle']['full_path'])
+                if os.path.exists(job['file_handle']['full_path']):
+                    job['file_handle']['status'] = 'READY'
+                    job['file_handle']['is_complete'] = True
+                    job['file_handle']['current_size'] = os.path.getsize(job['file_handle']['full_path'])
+                else:
+                    self.response.warning(f"File download was supposedly complete, the but file isn't there! Requeue it.")
+                    jobs_to_restart.append(job)
 
         # Delete any finished jobs from the jobs queue. Must be done here at the end
         # since it is not permissable to delete inside the above loop
