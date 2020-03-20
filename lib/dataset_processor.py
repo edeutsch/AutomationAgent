@@ -393,10 +393,10 @@ class DatasetProcessor:
                             fileroot = match.group(1)
                             if fileroot in dataset['metadata']['ms_runs']:
                                 if dataset['metadata']['ms_runs'][fileroot]['raw_file']['status'] == 'READY':
-                                    response.info(f"MS Run {fileroot} is READY")
+                                    #response.info(f"MS Run {fileroot} is READY")
                                     del previous_msruns[fileroot]
                                 else:
-                                    response.info(f"MS Run {fileroot} is still downloading")
+                                    #response.info(f"MS Run {fileroot} is still downloading")
                             else:
                                 destination_filepath = f"{dataset['metadata']['location']}/data/{filename}"
                                 if os.path.exists(destination_filepath) and noverify_files:
