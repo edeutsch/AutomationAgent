@@ -23,7 +23,7 @@ class DatasetProcessor:
         self.verbose = None
         self.response = None
         self.tasks_todo = []
-        self.base_dir = "G:/tmp/archive"
+        self.base_dir = "/proteomics/peptideatlas2/archive/Arabidopsis"
         self.state = { 'processing_state': 'Unknown', 'todo': 'assess' }
         self.datasets = { 'identifiers': {} }
 
@@ -309,6 +309,10 @@ class DatasetProcessor:
         """Assess to see if the desired files are there and downloaded
         """
 
+
+        noverify_files = False
+
+
         response = self.response
         response.info(f"Check if manifest and raw data are already downloaded")
 
@@ -326,7 +330,7 @@ class DatasetProcessor:
         response.info(f"Check for manifest")
         if 'manifest' not in dataset['metadata']:
             destination_filepath = f"{dataset['metadata']['location']}/data/README.txt"
-            if os.path.exists(destination_filepath):
+            if os.path.exists(destination_filepath) and noverify_files:
                 response.info(f"Found manifest (README.txt) already")
                 dataset['metadata']['manifest'] = {}
                 ftp_dir = None
@@ -395,7 +399,7 @@ class DatasetProcessor:
                                     response.info(f"MS Run {fileroot} is still downloading")
                             else:
                                 destination_filepath = f"{dataset['metadata']['location']}/data/{filename}"
-                                if os.path.exists(destination_filepath):
+                                if os.path.exists(destination_filepath) and noverify_files:
                                     response.info(f"Found MS Run raw file {filename} untracked but already present")
                                     dataset['metadata']['ms_runs'][fileroot] = {}
                                     dataset['metadata']['ms_runs'][fileroot]['raw_file'] = { 'status': 'READY', 'fileroot': fileroot,
