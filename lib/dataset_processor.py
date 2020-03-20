@@ -397,6 +397,7 @@ class DatasetProcessor:
                                     del previous_msruns[fileroot]
                                 else:
                                     #response.info(f"MS Run {fileroot} is still downloading")
+                                    pass
                             else:
                                 destination_filepath = f"{dataset['metadata']['location']}/data/{filename}"
                                 if os.path.exists(destination_filepath) and noverify_files:
