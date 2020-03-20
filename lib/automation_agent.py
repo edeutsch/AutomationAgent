@@ -87,9 +87,9 @@ class AutomationAgent:
         self.config = {
             'sleep_interval': 3,
             'heartbeat_interval': 60,
-            'data_path': "G:/tmp/archive",
+            'data_path': "/proteomics/peptideatlas2/archive/Arabidopsis",
             'max_running_jobs': 2,
-            'max_running_jobs_by_type': { 'download': 1 },
+            'max_running_jobs_by_type': { 'download': 2 },
         }
 
         # Try to find a config file and read it
@@ -361,7 +361,8 @@ class AutomationAgent:
                     now = time.time()
                     age = age = int(now-mtime)
                     output_status = f"file age: {age} s"
-            eprint(f"    - {job_id}: status={job['status']}, type={job['status']}, cmd={' '.join(job['args'])}, output: {output_status}")
+            if job['status'] == 'run':
+                eprint(f"    - {job_id}: status={job['status']}, type={job['status']}, cmd={' '.join(job['args'])}, output: {output_status}")
 
 
     # See if there are any queued jobs that can be launched
@@ -503,7 +504,7 @@ class AutomationAgent:
                 uri = task['file_metadata']['uri']
                 location = task['file_metadata']['location']
                 expected_output_file = task['file_metadata']['full_path']
-                new_job = { 'pid': None, 'type': 'download', 'args': [ "curl", "-O", "-C", "-", uri ], 'retry_staleness': 30,
+                new_job = { 'pid': None, 'type': 'download', 'args': [ "curl", "-R", "-O", "-C", "-", uri ], 'retry_staleness': 30,
                     'n_retries': 0, 'max_retries': 10, 'file_handle': task['file_metadata'],
                     'location': location, 'status': 'qw', 'handle': None, 'expected_output_file': expected_output_file }
                 self.add_job(new_job)
@@ -543,7 +544,7 @@ class AutomationAgent:
             got_match = False
             match = re.match(r'get\s+(.+)$',command)
             if match:
-                new_job = { 'pid': None, 'type': 'download', 'args': [ "curl", "-O", match.group(1) ],
+                new_job = { 'pid': None, 'type': 'download', 'args': [ "curl", "-R", "-O", match.group(1) ],
                     'location': self.config['data_path'], 'status': 'qw', 'handle': None }
                 self.add_job(new_job)
                 got_match = True
