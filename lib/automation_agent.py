@@ -72,7 +72,7 @@ class AutomationAgent:
         # Otherwise run
         self.run()
         self.stop()
-        print(self.show(level='full'))
+        #print(self.show(level='full'))
 
 
     # Prepare the agent configuration parameters
@@ -130,13 +130,13 @@ class AutomationAgent:
         self.state['status'] = 'Preparing'
 
         # See if there is a PID file
-        pid_file = self.start_directory+"/PID"
+        pid_file = self.start_directory + "/PID"
         if os.path.exists(pid_file):
             self.response.error(f"There is already a PID file {pid_file}. Another instance is running.", error_code='PIDFileAlreadyExists')
             return
 
         # See if there is a STOP file
-        stop_file = self.start_directory+"/STOP"
+        stop_file = self.start_directory + "/STOP"
         if os.path.exists(stop_file):
             try:
                 os.remove(stop_file)
@@ -185,7 +185,8 @@ class AutomationAgent:
         self.state['status'] = 'Configuring'
 
         # Try to find a pointer file and read it
-        pointer_file = os.path.dirname(os.path.abspath(__file__))+"/agent_commands.pointer"
+        #pointer_file = os.path.dirname(os.path.abspath(__file__))+"/agent_commands.pointer"
+        pointer_file = self.start_directory + "/agent_commands.pointer"
         if os.path.exists(pointer_file):
             try:
                 with open(pointer_file) as infile:
@@ -209,7 +210,8 @@ class AutomationAgent:
         self.response.debug(f"Updating command pointer file")
 
         # Try to find a pointer file and read it
-        pointer_file = os.path.dirname(os.path.abspath(__file__))+"/agent_commands.pointer"
+        #pointer_file = os.path.dirname(os.path.abspath(__file__))+"/agent_commands.pointer"
+        pointer_file = self.start_directory + "/agent_commands.pointer"
         try:
             with open(pointer_file,'w') as outfile:
                 outfile.write(f"{self.state['command_pointer']}\n")
@@ -227,7 +229,8 @@ class AutomationAgent:
         #self.response.debug(f"Reading command file")
 
         # Try to find a pointer file and read it
-        command_file = os.path.dirname(os.path.abspath(__file__))+"/agent_commands.txt"
+        #command_file = os.path.dirname(os.path.abspath(__file__))+"/agent_commands.txt"
+        command_file = self.start_directory + "/agent_commands.txt"
         if os.path.exists(command_file):
             try:
                 with open(command_file) as infile:
@@ -287,7 +290,7 @@ class AutomationAgent:
             # Run the main task of the agent
             self.main_task()
             if self.response.status != 'OK':
-                print(self.response.show(level=Response.DEBUG))
+                #print(self.response.show(level=Response.DEBUG))
                 return self.response
 
             # Sleep for the prescribed interval
@@ -297,7 +300,7 @@ class AutomationAgent:
             # If the heartbeat time is reached, then send a message
             heartbeat_time += self.config['sleep_interval']
             if heartbeat_time > self.config['heartbeat_interval']:
-                self.response.info(f"Agent is alive")
+                self.response.info(f"Agent is alive and monitoring agent_commands.txt for things to do")
                 heartbeat_time = 0
 
             # Check on the STOP file
@@ -478,15 +481,51 @@ class AutomationAgent:
             self.job_control['n_running_jobs'] -= 1
             self.job_control['n_running_jobs_by_type'][job['type']] -= 1
 
-            # If this was a file download job, update some key information
+            # If this was a file download job, check the result and clean up the queue entry
             if job['type'] == 'download':
+
+                # If there is a file where we expect it
                 if os.path.exists(job['file_handle']['full_path']):
-                    job['file_handle']['status'] = 'READY'
-                    job['file_handle']['is_complete'] = True
-                    job['file_handle']['current_size'] = os.path.getsize(job['file_handle']['full_path'])
+
+                    # If the job has a set minimum final page, then check that
+                    # (the curl downloader sets the final mtime of the file to that at the origin if completely successful
+                    # but if the curl dies half-way, then the mtime does get reset and indicates the current time, a telltale
+                    # sign of a failed download. If this is so, continue the download)
+                    if 'minimum_final_age' in job:
+                        mtime = os.path.getmtime(job['expected_output_file'])
+                        now = time.time()
+                        file_age = int(now - mtime)
+ 
+                        # If the age is greater than the final age, then we're done
+                        if file_age >= job['minimum_final_age']:
+                            job['file_handle']['status'] = 'READY'
+                            job['file_handle']['is_complete'] = True
+                            job['file_handle']['current_size'] = os.path.getsize(job['file_handle']['full_path'])
+
+                        # Otherwise, queue a retry with continue
+                        else:
+                            job['n_retries'] += 1
+                            if job['n_retries'] > job['max_retries']:
+                                self.response.error(f"Max retries {job['max_retries']} reached for file {job['expected_output_file']}", error_code='MaxRetriesReached')
+                            else:
+                                jobs_to_restart.append(job)
+
+                    # If there's no minium required age, then assume the download was fine
+                    else:
+                        job['file_handle']['status'] = 'READY'
+                        job['file_handle']['is_complete'] = True
+                        job['file_handle']['current_size'] = os.path.getsize(job['file_handle']['full_path'])
+
+                # Else if the file isn't there, then requeue it
                 else:
-                    self.response.warning(f"File download was supposedly complete, the but file isn't there! Requeue it.")
-                    jobs_to_restart.append(job)
+                    if return_code == 19:
+                        self.response.warning(f"Requested file is not present on remote server. Give up.")
+                        job['file_handle']['status'] = 'UNAVAILABLE'
+                        job['file_handle']['is_complete'] = True
+                        job['file_handle']['current_size'] = 0
+                    else:
+                        self.response.warning(f"File download was supposedly complete, the but file isn't there! Requeue it.")
+                        jobs_to_restart.append(job)
 
         # Delete any finished jobs from the jobs queue. Must be done here at the end
         # since it is not permissable to delete inside the above loop
@@ -517,7 +556,8 @@ class AutomationAgent:
                 expected_output_file = task['file_metadata']['full_path']
                 new_job = { 'pid': None, 'type': 'download', 'args': [ "curl", "-R", "-O", "-C", "-", uri ], 'retry_staleness': 30,
                     'n_retries': 0, 'max_retries': 10, 'file_handle': task['file_metadata'],
-                    'location': location, 'status': 'qw', 'handle': None, 'expected_output_file': expected_output_file }
+                    'location': location, 'status': 'qw', 'handle': None, 'expected_output_file': expected_output_file,
+                    'minimum_final_age': 60 * 60 * 24 }
                 self.add_job(new_job)
 
             # Process command convert_to_mzML
@@ -572,7 +612,7 @@ class AutomationAgent:
         result = self.dataset_processor.process()
         if result.status != 'OK':
             self.response.merge(result)
-            print(self.response.show(level=Response.DEBUG))
+            #print(self.response.show(level=Response.DEBUG))
             return self.response
 
         # Show the DatasetProcessor status
