@@ -26,6 +26,7 @@ class DatasetProcessor:
         self.base_dir = "/proteomics/peptideatlas2/archive/Arabidopsis"
         self.state = { 'processing_state': 'Unknown', 'todo': 'assess' }
         self.datasets = { 'identifiers': {} }
+        self.compressed_extension = 'zip'
 
         response = Response()
         self.response = response
@@ -54,7 +55,7 @@ class DatasetProcessor:
 
         # Set the self state and begin examining what we have
         response = self.response
-        response.info(f"Begin processing all datasets")
+        #response.info(f"Begin processing all datasets")
 
         for dataset_id in self.datasets['identifiers']:
             self.process_dataset(dataset_id)
@@ -73,7 +74,7 @@ class DatasetProcessor:
         # Get the dataset handle and set status
         dataset = self.datasets['identifiers'][dataset_id]
 
-        response.info(f"Processing dataset {dataset_id}. Currently in state {dataset['state']['processing_state']}")
+        #response.info(f"Processing dataset {dataset_id}. Currently in state {dataset['state']['processing_state']}")
         dataset['status'] = 'PROCESSING'
 
         #### Apply needed processing tasks to the dataset
@@ -101,17 +102,32 @@ class DatasetProcessor:
 
             elif dataset['state']['processing_state'] == 'Ready to convert':
                 dataset['state']['processing_state'] = 'Wait'
+                #self.assess_conversion(dataset_id)
+                #if dataset['state']['processing_state'] == 'Ready to convert':
+                #       self.convert_dataset(dataset_id)
+
+            elif dataset['state']['processing_state'] == 'Converting':
+                self.assess_conversion(dataset_id)
+
+            elif dataset['state']['processing_state'] == 'Ready to compress':
+                self.assess_conversion(dataset_id)
+                if dataset['state']['processing_state'] == 'Ready to compress':
+                    self.compress_dataset(dataset_id)
+
+            elif dataset['state']['processing_state'] == 'Compressing':
+                self.assess_conversion(dataset_id)
 
             elif dataset['state']['processing_state'] == 'Wait':
-                response.info(f"Done with what we are able to do so far")
+                #response.info(f"Done with what we are able to do so far")
                 dataset['status'] = 'READY'
                 return response
 
             else:
                 strange_state = dataset['state']['processing_state']
                 dataset['status'] = 'ERROR'
-                dataset['state']['processing_state'] = 'UnrecognizedState'
-                response.error(f"Unrecognized processing state {strange_state}", error_code=dataset['state']['processing_state'])
+                #dataset['state']['processing_state'] = 'UnrecognizedState'
+                #response.error(f"Unrecognized processing state {strange_state}", error_code=dataset['state']['processing_state'])
+                #response.warning(f"Unrecognized processing state {strange_state}")
                 return response
 
             # Don't need a loop here after all??
@@ -300,7 +316,7 @@ class DatasetProcessor:
             response.error(f"Unable to fetch ProteomeCentral record for dataset '{dataset_id}', status_code={status_code}. Not a publicly released dataset?", error_code=dataset['state']['processing_state'])
             return response
 
-        with open(f"{dataset['metadata']['location']}/data/ProteomeXchange.json", "w") as outfile:
+        with open(f"{dataset['metadata']['location']}/data/ProteomeXchange.json", "w", encoding="utf-8") as outfile:
             outfile.write(str(response_content.text))
 
 
@@ -376,7 +392,8 @@ class DatasetProcessor:
             else:
                 dataset['status'] = 'ERROR'
                 dataset['state']['processing_state'] = 'CannotImportMSRunsFromPXRecord'
-                response.error(f"Unable to import the MS Runs from the PX Record", error_code=dataset['state']['processing_state'])
+                #response.error(f"Unable to import the MS Runs from the PX Record", error_code=dataset['state']['processing_state'])
+                response.warning(f"Unable to import the MS Runs from the PX Record")
                 return response
 
         # Check that there are datasetFiles specified
@@ -423,7 +440,8 @@ class DatasetProcessor:
         else:
             dataset['status'] = 'ERROR'
             dataset['state']['processing_state'] = 'DatasetFilesMissingInPXRecord'
-            response.error(f"Unable to find the datasetFiles in the PX record", error_code=dataset['state']['processing_state'])
+            #response.error(f"Unable to find the datasetFiles in the PX record", error_code=dataset['state']['processing_state'])
+            response.warning(f"Unable to find the datasetFiles in the PX record")
             return response
 
         if len(previous_msruns) != 0 or len(missing_msruns) != 0:
@@ -434,7 +452,8 @@ class DatasetProcessor:
             else:
                 dataset['status'] = 'ERROR'
                 dataset['state']['processing_state'] = 'MissingMSRunFiles'
-                response.error(f"Unable to download some MS Runs", error_code=dataset['state']['processing_state'])
+                #response.error(f"Unable to download some MS Runs", error_code=dataset['state']['processing_state'])
+                response.warning(f"Unable to download some MS Runs")
                 return response
 
         # If we got this far, then everything is good
@@ -564,7 +583,7 @@ class DatasetProcessor:
             have_mzML_gz_file = False
             if os.path.exists(f"{dataset['metadata']['location']}/data/{filename}.mzML"):
                 have_mzML_file = True
-            if os.path.exists(f"{dataset['metadata']['location']}/data/{filename}.mzML.gz"):
+            if os.path.exists(f"{dataset['metadata']['location']}/data/{filename}.mzML.{self.compressed_extension}"):
                 have_mzML_gz_file = True
 
             if not have_mzML_record and have_mzML_file:
@@ -579,9 +598,9 @@ class DatasetProcessor:
                 have_mzML_record = True
 
             if not have_mzML_gz_record and have_mzML_gz_file:
-                filename = f"{fileroot}.mzML.gz"
+                filename = f"{fileroot}.mzML.{self.compressed_extension}"
                 destination_filepath = f"{dataset['metadata']['location']}/data/{filename}"
-                response.info(f"Found MS Run raw file {filename}.mzML.gz untracked but already present")
+                response.info(f"Found MS Run raw file {filename}.mzML.{self.compressed_extension} untracked but already present")
                 dataset['metadata']['ms_runs'][fileroot]['mzML_gz_file'] = { 'status': 'READY', 'fileroot': fileroot,
                     'filename': filename, 'full_path': f"{dataset['metadata']['location']}/data/{filename}",
                     'location': f"{dataset['metadata']['location']}/data",
@@ -604,10 +623,39 @@ class DatasetProcessor:
                 pass
 
 
-        if dataset['state']['processing_state'] == 'Ready to compress':
+        if dataset['state']['processing_state'] == 'Ready to convert':
             if mode == 'assess':
-                pass
-
+                if len(ms_runs_to_convert) == 0:
+                    dataset['state']['processing_state'] == 'Ready to compress'
+                    return
+                else:
+                    # stay ready to convert and the conversion will start
+                    return
+            else:
+                response.warning(f"I should not be here in Ready to convert and not assess")
+                return
+        elif dataset['state']['processing_state'] == 'Converting':
+            if mode == 'assess':
+                if len(ms_runs_to_convert) == 0:
+                    dataset['state']['processing_state'] == 'Ready to compress'
+                    return
+                else:
+                    response.warning(f"Still waiting for conversion to complete")
+                    return
+            else:
+                response.warning(f"I should not be here in Ready to convert and not assess")
+                return
+        elif dataset['state']['processing_state'] == 'Ready to compress':
+            if mode == 'assess':
+                if len(ms_runs_to_convert) == 0:
+                    dataset['state']['processing_state'] == 'Ready to compress'
+                    return
+                else:
+                    response.warning(f"Still waiting for conversion to complete")
+                    return
+            else:
+                response.warning(f"I should not be here in Ready to convert and not assess")
+                return
 
 
                 # Continue here with assess conversion! FIXME
@@ -659,7 +707,7 @@ class DatasetProcessor:
         """
 
         response = self.response
-        response.debug(f"Show DatasetProcessor status")
+        #response.debug(f"Show DatasetProcessor status")
 
         # Get a listing of available datasets and show their status
         dataset_ids = self.datasets['identifiers']
