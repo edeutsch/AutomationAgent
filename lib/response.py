@@ -147,9 +147,9 @@ class Response:
         buffer += f"  n_errors: {self.n_errors}  n_warnings: {self.n_warnings}  n_messages: {self.n_messages}\n"
         if self.status != 'OK':
             buffer += f"  error_code: {self.error_code}   message: {self.message}\n"
-        for message in self.messages:
-            if message['level'] >= level:
-                buffer += f"  - {message['prefix']}{message['message']}\n"
+        #for message in self.messages:
+        #    if message['level'] >= level:
+        #        buffer += f"  - {message['prefix']}{message['message']}\n"
         return buffer
 
 
