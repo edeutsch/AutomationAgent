@@ -18,6 +18,7 @@ class AutomationAgent:
     # Class variables
 
 
+    ###############################################################################################
     # Constructor
     def __init__(self):
         self.status = 'OK'
@@ -31,8 +32,15 @@ class AutomationAgent:
         self.dataset_processor = DatasetProcessor()
         self.start_directory = os.getcwd()
 
+    ###############################################################################################
     # Destructor
     def __del__(self):
+
+        #### If we're in a state of PIDFileAlreadyExists, then we don't want to delete these upon exit, because they don't belong to us
+        if self.response.error_code == 'PIDFileAlreadyExists':
+            self.response.warning(f"Do not delete PID file because it is not ours")
+            return
+
         #### Remove our PID file
         pid_file = self.start_directory+"/PID"
         if os.path.exists(pid_file):
@@ -44,7 +52,7 @@ class AutomationAgent:
             os.remove(stop_file)
 
 
-    # Start the agent
+    ###############################################################################################
     def start(self, startstop=None):
         """Public method that starts the agent
 
@@ -75,7 +83,7 @@ class AutomationAgent:
         #print(self.show(level='full'))
 
 
-    # Prepare the agent configuration parameters
+    ###############################################################################################
     def configure(self):
         """Public method that prepares a default configuration and reads the agent's config file
 
@@ -120,7 +128,7 @@ class AutomationAgent:
         self.dataset_processor.base_dir = self.config['data_path']
 
 
-    # Prepare the agent state
+    ###############################################################################################
     def prepare_state(self):
         """Public method that prepares basic low-level state of agent
 
@@ -160,7 +168,7 @@ class AutomationAgent:
         self.verify_data_path()
 
 
-    # Read or prepare the command pointer file
+    ###############################################################################################
     def verify_data_path(self):
         """Public method that verifies the configured data path
 
@@ -175,7 +183,7 @@ class AutomationAgent:
             return
 
 
-    # Read or prepare the command pointer file
+    ###############################################################################################
     def read_command_pointer_file(self):
         """Public method that reads the agent's command pointer file
 
@@ -201,7 +209,7 @@ class AutomationAgent:
             return
 
 
-    # Update the command pointer file
+    ###############################################################################################
     def update_command_pointer_file(self):
         """Public method that updates the agent's command pointer file
 
@@ -220,7 +228,7 @@ class AutomationAgent:
             return
 
 
-    # Read the next command from the command file
+    ###############################################################################################
     def read_command(self):
         """Public method that reads the next command from the agent's command file
 
@@ -255,7 +263,7 @@ class AutomationAgent:
 
 
 
-    # Return a text summary of the current state of the Response
+    ###############################################################################################
     def show(self, level='compact'):
         """Public method that returns a string buffer of a nice plain text rendering of the state of the agent.
 
@@ -272,7 +280,7 @@ class AutomationAgent:
         return buffer
 
 
-    # Run the agent in a loop
+    ###############################################################################################
     def run(self):
         """Public method that runs the agent in an endless loop until a STOP file is seen
 
@@ -309,7 +317,7 @@ class AutomationAgent:
                 break
 
 
-    # Stop the agent
+    ###############################################################################################
     def stop(self):
         """Public method that performs cleanup tasks for the agent
 
@@ -329,7 +337,7 @@ class AutomationAgent:
             os.remove(stop_file)
 
 
-    # Execute a presumed quick command that will block the current process
+    ###############################################################################################
     def execute_blocking(self, command, location):
         """Public method that executes a provided command
 
@@ -343,7 +351,7 @@ class AutomationAgent:
         eprint(result)
 
 
-    # Add a new job to the queue
+    ###############################################################################################
     def add_job(self, job):
         """Public method that adds a job to the queue
 
@@ -356,7 +364,7 @@ class AutomationAgent:
         self.job_control['job_index'] += 1
 
 
-    # Execute a presumed quick command that will block the current process
+    ###############################################################################################
     def show_jobs(self):
         """Public method that summarizes the jobs in the queue
 
@@ -375,7 +383,7 @@ class AutomationAgent:
                 eprint(f"    - {job_id}: status={job['status']}, type={job['status']}, cmd={' '.join(job['args'])}, output: {output_status}")
 
 
-    # See if there are any queued jobs that can be launched
+    ###############################################################################################
     def launch_jobs(self):
         """Public method that determines which waiting jobs to launch, if any
 
@@ -424,7 +432,7 @@ class AutomationAgent:
             self.job_control['n_running_jobs_by_type'][job_type] += 1
 
 
-    # See if there are any running jobs that are done
+    ###############################################################################################
     def poll_jobs(self):
         """Public method that reviews the list of running jobs for anything to complete
 
@@ -540,7 +548,7 @@ class AutomationAgent:
             self.add_job(new_job)
 
 
-    # Queue the tasks from the worker
+    ###############################################################################################
     def queue_tasks(self):
         """Loop through the tasks called out by the worker and queue them to execution
 
@@ -580,9 +588,7 @@ class AutomationAgent:
         self.dataset_processor.tasks_todo = []
 
 
-    ##########################################################################################
-
-    # Main task of the agent. Is called every sleep_interval seconds
+    ###############################################################################################
     def main_task(self):
         """Public method that runs the main task of agent. Override with the true work
 
