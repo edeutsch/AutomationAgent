@@ -9,6 +9,7 @@ import re
 import time
 import json
 import requests
+from ftplib import FTP
 
 from response import Response
 
@@ -17,6 +18,8 @@ class DatasetProcessor:
 
     # Class variables
 
+
+    ###############################################################################################
     # Constructor
     def __init__(self):
         self.status = 'OK'
@@ -32,6 +35,7 @@ class DatasetProcessor:
         self.response = response
 
 
+    ###############################################################################################
     def add_dataset(self, dataset_id):
         """Add a dataset to the dict of tracked datasets along with basic default attributes
         so that it may get processed
@@ -48,6 +52,7 @@ class DatasetProcessor:
         return response
 
 
+    ###############################################################################################
     def process(self):
         """Top level method to loop over all datasets in the system to process
 
@@ -63,7 +68,7 @@ class DatasetProcessor:
         return response
 
 
-    # Process the dataset
+    ###############################################################################################
     def process_dataset(self, dataset_id):
         """Finish the current step or take the next step in processing one dataset
         """
@@ -94,8 +99,8 @@ class DatasetProcessor:
 
             elif dataset['state']['processing_state'] == 'Ready to download':
                 self.assess_download(dataset_id)
-                if dataset['state']['processing_state'] == 'Ready to download':
-                    self.download_dataset(dataset_id)
+                #if dataset['state']['processing_state'] == 'Ready to download':
+                #    self.download_dataset(dataset_id)
 
             elif dataset['state']['processing_state'] == 'Downloading':
                 self.assess_download(dataset_id)
@@ -140,7 +145,7 @@ class DatasetProcessor:
                 return response
 
 
-
+    ###############################################################################################
     def assess_setup(self, dataset_id):
         """Assess the current state of the setup of the dataset
         """
@@ -239,12 +244,31 @@ class DatasetProcessor:
             response.info(f"Importing ProteomeXchange record information")
             dataset['metadata']['px_data'] = px_data
 
+
+        # Extract some key information from the px_data
+
+        # Extract the FTP location from the PX record
+        ftp_location = None
+        dataset['metadata']['ftp_location'] = None
+        if 'fullDatasetLinks' in px_data:
+            for term in px_data['fullDatasetLinks']:
+                if term['name'] == 'Dataset FTP location':
+                    ftp_location = term['value']
+        if ftp_location is not None:
+            dataset['metadata']['ftp_location'] = ftp_location
+        else:
+            dataset['status'] = 'ERROR'
+            dataset['state']['processing_state'] = 'CannotFindfullDatasetLinks'
+            response.error(f"Unable to find fullDatasetLinks in PX record for {dataset_id}", error_code=dataset['state']['processing_state'])
+
+
         # If we got this far, then we're ready to download
         response.info(f"Ready to move to download")
         dataset['state']['processing_state'] = 'Ready to download'
         return response
 
 
+    ###############################################################################################
     # Create the dataset destination
     def create_destination(self, dataset_id):
         """Create the destination area for the dataset
@@ -292,7 +316,7 @@ class DatasetProcessor:
         return response
 
 
-    # Fetch the PX record
+    ###############################################################################################
     def fetch_px_record(self, dataset_id):
         """Fetch the PX record and store it in the specified location
         """
@@ -320,17 +344,16 @@ class DatasetProcessor:
             outfile.write(str(response_content.text))
 
 
-    # Assess the state of downloaded files
+    ###############################################################################################
     def assess_download(self, dataset_id):
-        """Assess to see if the desired files are there and downloaded
+        """Assess to see if the desired files are there and downloaded and what needs to be done
+
         """
 
-
-        noverify_files = False
-
+        verify_by_curl_continue = False
 
         response = self.response
-        response.info(f"Check if manifest and raw data are already downloaded")
+        response.info(f"Assess the dataset directory to see what has been done and is to do")
 
         # Get the dataset handle and set status
         dataset = self.datasets['identifiers'][dataset_id]
@@ -339,46 +362,72 @@ class DatasetProcessor:
         # Set the mode to either assess (as a check on work that may have been done previously)
         # or verify (to verify that work that was just done has completed)
         mode = 'assess'
+
+
+        # This code never gets used! It is never in this state!!!!!!!!!!!!!!!!!!!! FIXME
         if dataset['state']['processing_state'] == 'Ready for conversion':
             mode = 'verify'
 
+        # Get the location of the remote FTP folder
+        ftp_dir = dataset['metadata']['ftp_location']
+        if ftp_dir is None:
+            ftp_dir = '????'
+
         # Check on the dataset manifest
-        response.info(f"Check for manifest")
+        response.info(f"Checking for PRIDE manifest")
+
+        # If there's no manifest entry in metadata, then create it
         if 'manifest' not in dataset['metadata']:
+            dataset['metadata']['manifest'] = { 'status': 'UNKNOWN' }
+
+        # If we're already in a ready state, then there's nothing to do
+        print(dataset['metadata']['manifest'])
+        if dataset['metadata']['manifest']['status'] == 'READY':
+            response.info(f"PRIDE manifest is READY")
+
+        #### If UNAVAILABLE, then wait some more
+        elif dataset['metadata']['manifest']['status'] == 'UNAVAILABLE':
+            response.info(f"Manifest is is not available at the source")
+            pass
+
+        # Otherwise, figure out what to do
+        else:
+
+            # If the file is already there, then record it
             destination_filepath = f"{dataset['metadata']['location']}/data/README.txt"
-            if os.path.exists(destination_filepath) and noverify_files:
-                response.info(f"Found manifest (README.txt) already")
-                dataset['metadata']['manifest'] = {}
-                ftp_dir = None
-                if 'fullDatasetLinks' in px_data:
-                    for term in px_data['fullDatasetLinks']:
-                        if term['name'] == 'Dataset FTP location':
-                            ftp_dir = term['value']
-                else:
-                    dataset['status'] = 'ERROR'
-                    dataset['state']['processing_state'] = 'CannotFindfullDatasetLinks'
-                    response.error(f"Unable to find fullDatasetLinks in PX record for {dataset_id}", error_code=dataset['state']['processing_state'])
-                if ftp_dir is not None:
-                    dataset['metadata']['manifest']['file'] = { 'status': 'READY', 'fileroot': 'README',
+            if os.path.exists(destination_filepath):
+                response.info(f"PRIDE manifest (README.txt) file is READY")
+                dataset['metadata']['manifest']['status'] = 'READY'
+                dataset['metadata']['manifest']['file'] = { 'status': 'READY', 'fileroot': 'README',
+                    'filename': 'README.txt', 'full_path': f"{dataset['metadata']['location']}/data/README.txt",
+                    'location': f"{dataset['metadata']['location']}/data",
+                    'expected_size': None, 'current_size': None, 'uri': f"{ftp_dir}/README.txt",
+                    'local_age': None, 'is_complete': True, 'filetype': 'txt' }
+
+            # If the file is not there
+            else:
+
+                # If the status is UNKNOWN, then this is the first we'vbe considered it and need to download it
+                if dataset['metadata']['manifest']['status'] == 'UNKNOWN':
+                    dataset['metadata']['manifest']['file'] = { 'status': 'TODO', 'fileroot': 'README',
                         'filename': 'README.txt', 'full_path': f"{dataset['metadata']['location']}/data/README.txt",
                         'location': f"{dataset['metadata']['location']}/data",
                         'expected_size': None, 'current_size': None, 'uri': f"{ftp_dir}/README.txt",
-                        'local_age': None, 'is_complete': True, 'filetype': 'txt' }
-                else:
-                    dataset['status'] = 'ERROR'
-                    dataset['state']['processing_state'] = 'CannotFindfullFTPBaseDir'
-                    response.error(f"Unable to find the FTP base dir in PX record for {dataset_id}", error_code=dataset['state']['processing_state'])
-            else:
-                if mode == 'assess':
-                    response.info(f"No manifest yet")
-                    return response
-                else:
-                    dataset['status'] = 'ERROR'
-                    dataset['state']['processing_state'] = 'CannotDownloadManifest'
-                    response.error(f"Unable to download the dataset manifest", error_code=dataset['state']['processing_state'])
-                    return response
+                        'local_age': None, 'is_complete': False, 'filetype': 'txt' }
+                    self.tasks_todo.append( { 'command': 'download_file', 'file_metadata': dataset['metadata']['manifest']['file'] } )
+                    dataset['metadata']['manifest']['status'] = 'DOWNLOADING'
+
+                #### If DOWNLOADING, then wait some more
+                elif dataset['metadata']['manifest']['status'] == 'DOWNLOADING':
+                    if dataset['metadata']['manifest']['file']['status'] == 'UNAVAILABLE':
+                        dataset['metadata']['manifest']['status'] = 'UNAVAILABLE'
+                    else:
+                        response.info(f"Manifest is still not available. Keep waiting.")
+                        pass
+
 
         # Check on individual runs
+        ms_runs = []
         previous_msruns = {}
         missing_msruns = {}
         if 'ms_runs' in dataset['metadata'] and dataset['metadata']['ms_runs'] is not None:
@@ -387,62 +436,95 @@ class DatasetProcessor:
                 have_previous_msruns = True
                 previous_msruns[msrun_name] = 1
         else:
-            if mode == 'assess':
-                dataset['metadata']['ms_runs'] = {}
-            else:
-                dataset['status'] = 'ERROR'
-                dataset['state']['processing_state'] = 'CannotImportMSRunsFromPXRecord'
-                #response.error(f"Unable to import the MS Runs from the PX Record", error_code=dataset['state']['processing_state'])
-                response.warning(f"Unable to import the MS Runs from the PX Record")
-                return response
+            response.debug(f"Creating container for MS runs")
+            dataset['metadata']['ms_runs'] = {}
 
-        # Check that there are datasetFiles specified
-        if 'datasetFiles' in px_data:
-            #### Loop over all the datasetFiles to find the MS Runs
-            for dataset_file in px_data['datasetFiles']:
-                if dataset_file['name'] == 'Associated raw file URI':
-                    uri = dataset_file['value']
-                    match = re.match(r'(.+)/(.+)?$',uri)
-                    if match:
-                        filename = match.group(2)
-                        match = re.match(r'(.+)\.(.+)?$',filename)
+
+        #### If there's no information on the runs yet, then create it
+        if len(previous_msruns) == 0 and len(missing_msruns) == 0:
+
+            #### If there is available information in the PX record datasetFiles
+            if 'datasetFiles' in px_data:
+                response.info(f"Found datasetFiles in the PX record")
+                #### Loop over all the datasetFiles to find the MS Runs
+                for dataset_file in px_data['datasetFiles']:
+                    if dataset_file['name'] == 'Associated raw file URI':
+                        uri = dataset_file['value']
+                        match = re.match(r'(.+)/(.+)?$',uri)
                         if match:
-                            fileroot = match.group(1)
-                            if fileroot in dataset['metadata']['ms_runs']:
-                                if dataset['metadata']['ms_runs'][fileroot]['raw_file']['status'] == 'READY':
-                                    #response.info(f"MS Run {fileroot} is READY")
-                                    del previous_msruns[fileroot]
-                                else:
-                                    #response.info(f"MS Run {fileroot} is still downloading")
-                                    pass
-                            else:
-                                destination_filepath = f"{dataset['metadata']['location']}/data/{filename}"
-                                if os.path.exists(destination_filepath) and noverify_files:
-                                    response.info(f"Found MS Run raw file {filename} untracked but already present")
-                                    dataset['metadata']['ms_runs'][fileroot] = {}
-                                    dataset['metadata']['ms_runs'][fileroot]['raw_file'] = { 'status': 'READY', 'fileroot': fileroot,
-                                        'filename': filename, 'full_path': f"{dataset['metadata']['location']}/data/{filename}",
-                                        'location': f"{dataset['metadata']['location']}/data",
-                                        'expected_size': None, 'current_size': None, 'uri': uri,
-                                        'local_age': None, 'is_complete': True, 'filetype': match.group(2) }
-                                else:
-                                    missing_msruns[fileroot] = 1
+                            filename = match.group(2)
+                            ms_runs.append({ 'filename': filename, 'uri': uri })
                         else:
                             dataset['status'] = 'ERROR'
-                            dataset['state']['processing_state'] = 'FailedFileRootMatch'
-                            response.error(f"Unable to get the file root for {filename}", error_code=dataset['state']['processing_state'])
+                            dataset['state']['processing_state'] = 'FailedFilenameMatch'
+                            response.error(f"Unable to get the file file name in uri {uri}", error_code=dataset['state']['processing_state'])
                             return response
+
+            #### If the files are not listed in the PX record, try getting a listing at the source via FTP
+            else:
+                response.warning(f"Unable to find the datasetFiles in the PX record. Trying to get an FTP listing at the source.")
+                ms_runs = self.get_ftp_dir_listing(dataset_id, previous_msruns, missing_msruns, verify_by_curl_continue)
+                if ms_runs is None or len(ms_runs) == 0:
+                    dataset['status'] = 'ERROR'
+                    dataset['state']['processing_state'] = 'DatasetFilesFailedFTPDirListing'
+                    return response
+
+                response.warning(f"Obtained a file listing at the source. This is great, but if there are subfolders, this won't work")
+
+            #### Loop over the runs we have and process
+            for ms_run in ms_runs:
+                filename = ms_run['filename']
+                uri = ms_run['uri']
+                match = re.match(r'(.+)\.(.+)?$',filename)
+                if match:
+                    fileroot = match.group(1)
+                    if fileroot in dataset['metadata']['ms_runs']:
+                        if dataset['metadata']['ms_runs'][fileroot]['raw_file']['status'] == 'READY':
+                            response.info(f"MS Run {fileroot} is READY")
+                            del previous_msruns[fileroot]
+                        else:
+                            #response.info(f"MS Run {fileroot} is still downloading")
+                            pass
                     else:
-                        dataset['status'] = 'ERROR'
-                        dataset['state']['processing_state'] = 'FailedFilenameMatch'
-                        response.error(f"Unable to get the file file name in uri {uri}", error_code=dataset['state']['processing_state'])
-                        return response
-        else:
-            dataset['status'] = 'ERROR'
-            dataset['state']['processing_state'] = 'DatasetFilesMissingInPXRecord'
-            #response.error(f"Unable to find the datasetFiles in the PX record", error_code=dataset['state']['processing_state'])
-            response.warning(f"Unable to find the datasetFiles in the PX record")
-            return response
+                        destination_filepath = f"{dataset['metadata']['location']}/data/{filename}"
+                        file_info = { 'status': 'TODO',
+                            'fileroot': fileroot,
+                            'filename': filename,
+                            'full_path': f"{dataset['metadata']['location']}/data/{filename}",
+                            'location': f"{dataset['metadata']['location']}/data",
+                            'expected_size': None,
+                            'current_size': None,
+                            'uri': uri,
+                            'local_age': None,
+                            'is_complete': False,
+                            'filetype': match.group(2) }
+
+                        if os.path.exists(destination_filepath):
+                            response.info(f"Found MS Run raw file {filename} untracked but already present")
+                            file_info['status'] = 'READY'
+                            file_info['is_complete'] = True
+
+                        if verify_by_curl_continue:
+                            response.info(f"But verify_by_curl_continue is set, so perform a curl continue anyway")
+                            file_info['status'] = 'TODO'
+                            file_info['is_complete'] = False
+
+                        dataset['metadata']['ms_runs'][fileroot] = {}
+                        dataset['metadata']['ms_runs'][fileroot]['raw_file'] = file_info
+
+                        if file_info['status'] == 'TODO':
+                            self.tasks_todo.append( { 'command': 'download_file', 'file_metadata': dataset['metadata']['ms_runs'][fileroot]['raw_file'] } )
+                            missing_msruns[fileroot] = 1
+                            dataset['status'] = 'PROCESSING'
+                            dataset['state']['processing_state'] = 'Downloading'
+
+                else:
+                    dataset['status'] = 'ERROR'
+                    dataset['state']['processing_state'] = 'FailedFileRootMatch'
+                    response.error(f"Unable to get the file root for {filename}", error_code=dataset['state']['processing_state'])
+                    return response
+
+
 
         if len(previous_msruns) != 0 or len(missing_msruns) != 0:
             if mode == 'assess':
@@ -462,7 +544,7 @@ class DatasetProcessor:
         return response
 
 
-    # Fetch a file via HTTP
+    ###############################################################################################
     def download_dataset(self, dataset_id):
         """Public method that reads the PX dataset information and checks/updates extracted metadata
 
@@ -477,25 +559,25 @@ class DatasetProcessor:
         px_data = dataset['metadata']['px_data']
 
         # If we don't already have the manifest, queue a fetch for that
-        if 'manifest' not in dataset['metadata']:
-            ftp_dir = None
-            dataset['metadata']['manifest'] = {}
-            if 'fullDatasetLinks' in px_data:
-                for term in px_data['fullDatasetLinks']:
-                    if term['name'] == 'Dataset FTP location':
-                        ftp_dir = term['value']
-            else:
-                dataset['status'] = 'ERROR'
-                dataset['state']['processing_state'] = 'CannotFindfullDatasetLinks'
-                response.error(f"Unable to find fullDatasetLinks in PX record for {dataset_id}", error_code=dataset['state']['processing_state'])
-            if ftp_dir is not None:
-                response.info(f"Queueing manifest (README.txt) for download")
-                dataset['metadata']['manifest']['file'] = { 'status': 'TODO', 'fileroot': 'README',
-                    'filename': 'README.txt', 'full_path': f"{dataset['metadata']['location']}/data/README.txt",
-                    'location': f"{dataset['metadata']['location']}/data",
-                    'expected_size': None, 'current_size': None, 'uri': f"{ftp_dir}/README.txt",
-                    'local_age': None, 'is_complete': False, 'filetype': 'txt' }
-                self.tasks_todo.append( { 'command': 'download_file', 'file_metadata': dataset['metadata']['manifest']['file'] } )
+        #if 'manifest' not in dataset['metadata']:
+        #    ftp_dir = None
+        #    dataset['metadata']['manifest'] = {}
+        #    if 'fullDatasetLinks' in px_data:
+        #        for term in px_data['fullDatasetLinks']:
+        #            if term['name'] == 'Dataset FTP location':
+        #                ftp_dir = term['value']
+        #    else:
+        #        dataset['status'] = 'ERROR'
+        #        dataset['state']['processing_state'] = 'CannotFindfullDatasetLinks'
+        #        response.error(f"Unable to find fullDatasetLinks in PX record for {dataset_id}", error_code=dataset['state']['processing_state'])
+        #    if ftp_dir is not None:
+        #        response.info(f"Queueing manifest (README.txt) for download")
+        #        dataset['metadata']['manifest']['file'] = { 'status': 'TODO', 'fileroot': 'README',
+        #            'filename': 'README.txt', 'full_path': f"{dataset['metadata']['location']}/data/README.txt",
+        #            'location': f"{dataset['metadata']['location']}/data",
+        #            'expected_size': None, 'current_size': None, 'uri': f"{ftp_dir}/README.txt",
+        #            'local_age': None, 'is_complete': False, 'filetype': 'txt' }
+        #        self.tasks_todo.append( { 'command': 'download_file', 'file_metadata': dataset['metadata']['manifest']['file'] } )
 
         # Check the previous list of ms runs
         have_previous_msruns = False
@@ -542,13 +624,73 @@ class DatasetProcessor:
         dataset['state']['processing_state'] = 'Downloading'
 
 
+    ###############################################################################################
+    def get_ftp_dir_listing(self, dataset_id, previous_msruns, missing_msruns, verify_by_curl_continue):
+        """Public method that reads the contents of the remote FTP directory
+
+        """
+
+        response = self.response
+        response.info(f"Checking the contents of the remote FTP directory")
+
+        # Get the dataset handle and set status
+        dataset = self.datasets['identifiers'][dataset_id]
+        dataset['status'] = 'PROCESSING'
+        px_data = dataset['metadata']['px_data']
+        ms_runs = []
+
+        # Get the FTP location
+        ftp_url = None
+        if 'fullDatasetLinks' in px_data:
+            for term in px_data['fullDatasetLinks']:
+                if term['name'] == 'Dataset FTP location':
+                    ftp_url = term['value']
+        else:
+            dataset['status'] = 'ERROR'
+            dataset['state']['processing_state'] = 'CannotFindfullDatasetLinks'
+            response.error(f"Unable to find fullDatasetLinks in PX record for {dataset_id}", error_code=dataset['state']['processing_state'])
+            return
+
+        # Try to decompose the FTP location
+        response.info(f"Remote FTP location is {ftp_url}")
+        match = re.match(r'ftp://(.+?)/(.+)$',ftp_url)
+        if match:
+            ftp_host = match.group(1)
+            ftp_dir = match.group(2)
+
+        else:
+            dataset['status'] = 'ERROR'
+            dataset['state']['processing_state'] = 'CannotReadRemoteFTPDir'
+            response.error(f"Unable to read the remote FTP directory {ftp_url}", error_code=dataset['state']['processing_state'])
+            return
+
+        try:
+            response.info(f"Connecting to {ftp_host}")
+            ftp_session = FTP(ftp_host)
+            response.info(f"Login as anonymous")
+            ftp_session.login()
+            response.info(f"Set CWD to {ftp_dir}")
+            ftp_session.cwd(ftp_dir)
+            response.info(f"Executing nlst")
+            files = ftp_session.nlst()
+        except:
+            dataset['status'] = 'ERROR'
+            dataset['state']['processing_state'] = 'FailedFTPDirListing'
+            response.error(f"Unable to get the dir listing at {ftp_url}", error_code=dataset['state']['processing_state'])
+            return
+
+        #### Loop over all the files to guess the MS Runs
+        for filename in files:
+            if filename.endswith('.raw') or filename.endswith('.RAW'):
+                ms_runs.append( { 'filename': filename, 'uri': f"{ftp_url}/{filename}" } )
+
+        return ms_runs
 
 
-
-
-    # Assess if the RAW files have been converted to mzML
+    ###############################################################################################
     def assess_conversion(self, dataset_id):
         """Assess if the RAW files have been converted to mzML
+
         """
 
         response = self.response
@@ -661,11 +803,7 @@ class DatasetProcessor:
                 # Continue here with assess conversion! FIXME
 
 
-
-
-
-
-    # Assess if the RAW files have been converted to mzML
+    ###############################################################################################
     def assess_mzML(self, dataset_id):
         """Check if there is an mzML file and if not queue a conversion
 
@@ -699,8 +837,7 @@ class DatasetProcessor:
             # Or if we have the mzMLs but not mzML.gz, then queue the READY ones
 
 
-
-    # Show a summary of the status of the DatasetProcessor
+    ###############################################################################################
     def show(self, level='high'):
         """Public method that shows the current status of the processor
 
@@ -729,6 +866,8 @@ class DatasetProcessor:
 
 
         return buffer
+
+
 
 
 ##########################################################################################
